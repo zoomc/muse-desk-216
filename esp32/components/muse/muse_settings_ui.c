@@ -104,8 +104,8 @@ static const char *const SLEEP_NAMES[] = { "Never", "30 seconds", "1 minute", "2
 static lv_obj_t *s_sleep_checks[SLEEP_COUNT];
 
 /* Battery page. */
-static lv_obj_t *s_batt_status, *s_batt_level, *s_batt_drain, *s_batt_full, *s_batt_off, *s_batt_slept, *s_batt_wakes,
-    *s_batt_busy, *s_batt_awake;
+static lv_obj_t *s_batt_status, *s_batt_level, *s_batt_left, *s_batt_drain, *s_batt_full, *s_batt_off, *s_batt_slept,
+    *s_batt_wakes, *s_batt_busy, *s_batt_awake;
 static int64_t s_batt_shown_us;
 
 /* Text entry page. */
@@ -1130,6 +1130,7 @@ static void build_battery_page(lv_obj_t *tile)
     s_batt_shown_us = 0;
     s_batt_status = note(list, "");
     s_batt_level = info_row(list, "Battery");
+    s_batt_left = info_row(list, "Time left");
     s_batt_drain = info_row(list, "Used");
     s_batt_full = info_row(list, "A full charge");
     s_batt_off = info_row(list, "Screen off");
@@ -1186,6 +1187,27 @@ static void tick_battery(void)
         snprintf(buf, sizeof(buf), "%s%d%%", p.charging ? LV_SYMBOL_CHARGE " " : "", p.battery_pct);
     }
     set_text(s_batt_level, buf);
+
+    /* wupsbr's "time left": voltage-curve fit over the last few minutes,
+     * ready about a minute after unplugging; the drain rows below are the
+     * gauge-based long-run numbers. */
+    int eta_mins;
+    if (p.battery_pct < 0) {
+        set_text(s_batt_left, "-");
+    } else if (p.charging) {
+        set_text(s_batt_left, "Charging");
+    } else if (!b.running) {
+        set_text(s_batt_left, "On USB");
+    } else if (muse_battery_eta(p.battery_pct, &eta_mins)) {
+        if (eta_mins >= 60) {
+            snprintf(buf, sizeof(buf), "~%d h %02d min", eta_mins / 60, eta_mins % 60);
+        } else {
+            snprintf(buf, sizeof(buf), "~%d min", eta_mins);
+        }
+        set_text(s_batt_left, buf);
+    } else {
+        set_text(s_batt_left, "Estimating...");
+    }
 
     int used = b.pct_start - b.pct_now, rate10, full_h;
     if (!b.started) {

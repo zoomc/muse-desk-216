@@ -40,6 +40,23 @@ void muse_ui_set_swipe_enabled(bool enabled);
 void muse_ui_preview_brightness(int pct);
 
 /*
+ * Presentation state machine (P1): the UI state frame_tick resolved from
+ * muse_state's mode plus the sleep flag. BOOT reads as idle, OFF as sleepy.
+ */
+typedef enum {
+    MUSE_UI_IDLE,
+    MUSE_UI_LISTENING,
+    MUSE_UI_THINKING,
+    MUSE_UI_SPEAKING,
+    MUSE_UI_SLEEPY,
+    MUSE_UI_ERROR,
+    MUSE_UI_COUNT,
+} muse_ui_state_t;
+
+/* The state of the last frame (LVGL task; unknown until the UI is up). */
+muse_ui_state_t muse_ui_state(void);
+
+/*
  * display.draw_url, from any task. An image covers the face until a tap, a
  * talk, the menu or muse_ui_image_hide(). Pixels are RGB565, high byte first.
  * The size is false without PSRAM for the image or before the UI is up.

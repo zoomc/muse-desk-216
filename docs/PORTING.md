@@ -55,3 +55,52 @@ s3-216 显示/音频驱动未动（`boards/board_waveshare_s3_216.c`、`muse_lcd
 字幕分页按 UTF-8 码点：`esp32/components/muse/muse_chat_text.c` `next_line`（`muse_text_ascii`/`muse_text_cjk` 按码点计宽，`end += bytes` 按字节推进，从不在多字节字符中间断开；`muse_hatch_tail_words`/`escape_some` 同理跳过 continuation bytes）。此为基线已有能力，本次未改，仅复用。
 
 已知边界：本字库为 GB2312 级（生僻字/繁体/注音多数缺字，emoji 按既有过滤丢弃）；box3 的 `muse_locale*.c` 整套中文菜单文案未移植（BOX-3 布局专用），s3-216 菜单保持英文、字幕中文正常。
+
+## 4. P1：触摸音量 + 电池剩余时间 + UI 状态机
+
+来源仓库（行号指移植时来源文件的行号）：
+
+- wupsbr fork: <https://github.com/wupsbr/waveshare-muse-gadget-sdk.git> @ `2c648812feb606a85043e368e711e0ca82d61ab9`
+- charm-mosaico: <https://github.com/samyeei/Muse-charm-mosaico.git> @ `8d94c427390e9aad56f21b027757241a5c141158`（`projects/muse_companion/main/` 下）
+
+### 4.1 触摸音量（来源 wupsbr，只取音量部分）
+
+| 来源文件 | 行号范围 | 内容 | 本仓库目标文件 |
+|---|---|---|---|
+| `esp32/components/muse/muse_ui.c` | L76–79 | `COLOR_VOL`/`COLOR_VOL_TRACK`、`VOL_STEP`（5%/步）、`VOL_SHOW_S`、`VOL_FADE_MS` | `esp32/components/muse/muse_ui.c`（`COLOR_LIT` 后） |
+| 同上 | L155–162 | `DRAG_*` 四态 + `s_vol`/`s_vol_step_px`/`s_drag`/`s_drag_at`/`s_drag_vol`/`s_vol_hide_at` | 同上（`s_shown_speaker` 后；原样，未取 `s_rub`/`s_tap`） |
+| 同上 | L1002–1030 | `build_volume()`：圆屏 bezel 内青色圆环（复用 `on_ring_draw` slab 优化）、方屏右侧竖条；初始隐藏、不可点击 | 同上（`on_ring_draw` 后） |
+| 同上 | L1033–1079 | `set_vol_opa` + `vol_faded` + `fade_volume`（2s 后 300ms 淡出）+ `show_volume`（扬声器关时变暗，只记电平） | 同上 |
+| 同上 | L1082–1147 | `drag_can_start()` + `volume_drag()`：头像 tile 纵向拖拽（`\|dy\|>2·\|dx\|`、步长屏高 5%）每步 ±5，上滑大、下滑小；拖动中 `muse_audio_set_volume` 实时试听，松开 `muse_settings_set_volume` 写 flash + chirp；横滑仍进设置页 | 同上（`frame_tick` 首行调用；`muse_ui_start` 内 `if (s_face) build_volume(s_face)`） |
+| 同上 | L819 | `on_ring_draw` 取 `lv_event_get_target_obj(e)` 而非 `s_ring`（音量圆环复用同一绘制优化） | 同上 `on_ring_draw` 开头两行 |
+
+刻意改动（相对来源）：`DRAG_WATCH` 判定去掉了 `s_rub.turns >= 2`（揉脸检测未移植，见下）；`muse_ui_start` 只接 `build_volume`，不包 `touch_read`/`on_touch`、不设 `s_rub_step`。
+
+未移植：wupsbr 的揉脸/连击 tickle（`muse_ui.c` L1160–1280 `touch_read`/`on_touch`/`tickle_poll`/`within`/`tickle`/`rub_restart` + `muse_state` 的 tickle/dizzy/sleepy/waking API）。本仓库 `muse_state.h` 无这套 API，且属趣味功能，超出 P1 范围；接入需先给 `muse_state` 加 tickle 状态，留待后续。
+
+s3-216 显示/音频驱动未动：只经 LVGL `lv_indev_*` 读触摸、经 `muse_audio_set_volume`/`muse_settings_set_volume` 改音量；`boards/board_waveshare_s3_216.c`、`muse_lcd_bands.c`、`muse_audio.c` 均未改。
+
+### 4.2 电池剩余时间（来源 wupsbr；百分比/充电状态为既有能力）
+
+先读结论：本仓库电池链路已完整——s3-216 板文件 `boards/board_waveshare_s3_216.c` L272 `.read_power = muse_pmu_read_power`（AXP2101 读 `battery_pct`/`battery_mv`/`charging`/`usb`，见 `muse_pmu.c` L151），`muse_input.c` L446 轮询后经 `muse_state_set_power` 分发，主屏 `update_power` 与设置页 `tick_battery`/`tick_home` 已显示百分比 + 充电状态。wupsbr 的电池页反而是简化版（只有 Battery + Time left 两行），照搬会丢掉本仓库上游风格的测量页（Used / A full charge / Screen off / Chip asleep / Wakes / CPU busy）。因此只补 wupsbr 独有的电压拟合剩余时间，保留现有详细页。
+
+| 来源文件 | 行号范围 | 内容 | 本仓库目标文件 |
+|---|---|---|---|
+| `esp32/components/muse/muse_battery.c` | L373–449 | 注释 + `ETA_EVERY_S=10`/`ETA_SAMPLES=30`/`ETA_MIN_SAMPLES=6`/`ETA_MAX_MIN` + `s_eta` + `curve_tenths`（LiPo 电压曲线）+ `eta_reset`/`eta_note` + `muse_battery_eta`（最小二乘斜率；环形缓冲按存储序求和，斜率与顺序无关） | `esp32/components/muse/muse_battery.c`（`muse_battery_drain` 后；`note_power` 前加 `eta_reset`/`eta_note` 前向声明） |
+| 同上 | L457, L462 | `note_power`：开始测量时 `eta_reset()`，测量中 `eta_note(p)` | 同上 `muse_battery_note_power`（`muse_battery_reset` 未加 `eta_reset`，与来源一致：下次开始测量时重置） |
+| `esp32/components/muse/muse_battery.h` | L67–69 | `muse_battery_eta(int pct_now, int *mins)` 声明 + 文档 | `esp32/components/muse/muse_battery.h`（`muse_battery_drain` 后） |
+| `esp32/components/muse/muse_settings_ui.c` | L107, L1127–1171 | `s_batt_left` "Time left" 行：充电→Charging、USB→On USB、有拟合→`~H h MM min`/`~M min`、否则 Estimating | `esp32/components/muse/muse_settings_ui.c`（既有详细页上新增 `s_batt_left` 一行，不删原有行） |
+
+已知边界：`curve_tenths` 系 StickS3/Watcher 的 LiPo 曲线，s3-216 的 AXP2101 同为单节 LiPo 计，拟合可用但斜率未经真机标定；`battery_mv<=2500` 时回退到 `pct*10`（有电池但读不到电压的板）。
+
+### 4.3 LVGL 原生六态机（借鉴 charm `companion_model`，未搬 ESP-GSP）
+
+charm 的 UI 是 ESP-GSP/Mosaico 场景播放器（`companion_ui.c` L29–42 六姿态互斥显示、L266–299 `character_motion()` 程序化位移：待机呼吸/聆听轻摆/思考起伏+圆点/说话点头/困倦慢呼吸/错误摇晃；L197–211 每态字幕+hint），与本仓库 LVGL 完全不兼容，按 DESIGN.md §4 只能借鉴思路。charm 状态机本体（`companion_model.h` L6–7 `COMP_IDLE/LISTENING/THINKING/SPEAKING/SLEEPY/ERROR` + L14–28 快照；`companion_model.c` L34–46 PRESS→LISTENING/RELEASE→THINKING、L84–98 `tick` 空闲变暗→SLEEPY、L104–116 reply/done/error 切换）自己拥有输入，而本仓库输入分散在 voice/input 各任务经 `muse_state_set_mode()`/`muse_state_set_asleep()` 写入共享状态——因此本实现为解析式（resolve）而非驱动式：每帧从 `muse_state` 解析出呈现态，切换仍由原有事件驱动。
+
+| 来源 | 行号范围 | 借鉴点 | 本仓库目标文件 |
+|---|---|---|---|
+| charm `companion_model.h` | L6–7, L34–46 | 六态枚举 + PRESS/RELEASE/CANCEL/MUTE/VOLUME…动作表（动作→效果位思想） | `esp32/components/muse/muse_ui.h`（`muse_ui_state_t` 公开枚举 + `muse_ui_state()`） |
+| charm `companion_model.c` | L34–60, L84–98, L104–116 | PRESS→listening / RELEASE→thinking / reply→speaking / done→idle / error→error / 熄屏超时→sleepy 的切换表 | `esp32/components/muse/muse_ui.c`（`resolve_ui_state()` + 注释中的切换表；切换执行仍在 `muse_voice.c`/`muse_input.c` 原有 `set_mode`/`set_asleep` 处） |
+| charm `companion_ui.c` | L197–211, L266–299 | 每态字幕/hint + 每态位移动画 | 每态屏幕表现（LVGL 原生，既有控件）：idle=READY/米色mic灭+表隐藏；listening=点亮mic+实时电平表+ring进度；thinking=spinner ring+回复布局让位；speaking=ring进度+回复页+TTS；sleepy=暗屏+触摸罩+亮度0（`update_sleep`）；error=ERROR+accent色+管线错误字幕。字幕仍归 voice 管线所有，状态机不写字幕，避免打架 |
+
+`s_last_mode` 已由 `s_ui_state` 取代：`frame_tick` 解析→`ui_state_enter()`（切换日志 + listening 入场：清推送图、滑回头像页）→`ui_draw_mode()` 映射回 `muse_mode_t` 供头像/ring/表/字幕绘制（BOOT→idle 画 "WAKING UP"，OFF→sleepy；asleep 时 `update_sleep()` 本就跳过绘制）。

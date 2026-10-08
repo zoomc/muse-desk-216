@@ -31,6 +31,7 @@
 #include "src/draw/lv_image_decoder_private.h"   /* custom decoder */
 #include "src/misc/lv_area_private.h"            /* lv_area_intersect, for the ring */
 
+#include "muse_audio.h"
 #include "muse_ble.h"
 #include "muse_board.h"
 #include "muse_chat.h"
@@ -43,6 +44,7 @@
 #include "muse_settings_ui.h"
 #include "muse_state.h"
 #include "muse_text.h"
+#include "muse_voice.h"
 #include "muse_wifi.h"
 #if CONFIG_MUSE_WATCHER_CAMERA
 #include "boards/watcher_camera.h"
@@ -70,6 +72,11 @@ static const char *TAG = "muse_ui";
 #define COLOR_ACCENT 0xa77dff
 #define COLOR_DOT_OFF 0x3a3358
 #define COLOR_LIT 0xf2efff
+#define COLOR_VOL 0x50dcff
+#define COLOR_VOL_TRACK 0x34343c
+#define VOL_STEP 5              /* per 5% of the screen's height dragged */
+#define VOL_SHOW_S 2.0f
+#define VOL_FADE_MS 300
 #define SETTINGS_TICK_S 0.25f
 
 /* Text on 128 px screens, as in the button menu (muse_menu.c). */
@@ -143,7 +150,118 @@ static int s_brightness = -1;       /* last applied */
 static int s_preview_brightness = -1;
 static int s_shown_page = -1;
 static int s_shown_speaker = -1;
-static muse_mode_t s_last_mode = MUSE_MODE_COUNT;
+
+/*
+ * Touch volume (P1, ported from wupsbr): a vertical drag on Muse's screen
+ * sets the volume. Deliberately the volume part only: wupsbr's rub/tickle
+ * detector (s_rub/s_tap, touch_read wrapper, on_touch) needs muse_state
+ * tickle/dizzy APIs this tree doesn't have, so it stays out.
+ */
+enum { DRAG_NONE, DRAG_WATCH, DRAG_VOLUME, DRAG_OTHER };
+static lv_obj_t *s_vol;         /* a ring inside the bezel, or a bar on a rectangle's right edge */
+static int s_vol_step_px;
+static int s_drag = DRAG_NONE;
+static lv_point_t s_drag_at;    /* where the press started, then where the last step was taken */
+static int s_drag_vol;
+static float s_vol_hide_at;     /* 0 once fading */
+
+/*
+ * Presentation state machine (P1, charm-inspired, LVGL-native): six UI
+ * states resolved each frame from muse_state's mode plus the sleep flag.
+ * charm's companion_model OWNS its transitions (it owns input); here input is
+ * spread over the voice/input tasks, so this layer RESOLVES the presentation
+ * state from the shared store instead of driving it. Transitions still come
+ * from the same events (talk press/release, reply done, error, sleep
+ * timeout/poke) via muse_state_set_mode()/muse_state_set_asleep().
+ *
+ * Per-state screen表现 (see ui_state_enter() + update_status()):
+ *   idle      READY (or the Wi-Fi label), dim mic, meter hidden, pipeline caption
+ *   listening LISTENING, mic lit, live level meter, ring = progress
+ *   thinking  THINKING, spinner ring, reply layout making room
+ *   speaking  SPEAKING, ring = progress, reply page + TTS audio
+ *   sleepy    panel dark + touch cover, brightness 0 (update_sleep owns it)
+ *   error     ERROR, accent colour, pipeline error caption, ring held
+ * BOOT presents as idle ("WAKING UP" via MODE_NAMES); OFF as sleepy.
+ */
+static volatile muse_ui_state_t s_ui_state = MUSE_UI_COUNT;   /* unknown until the first frame */
+static const char *const UI_STATE_NAMES[MUSE_UI_COUNT] = {
+    [MUSE_UI_IDLE] = "idle",
+    [MUSE_UI_LISTENING] = "listening",
+    [MUSE_UI_THINKING] = "thinking",
+    [MUSE_UI_SPEAKING] = "speaking",
+    [MUSE_UI_SLEEPY] = "sleepy",
+    [MUSE_UI_ERROR] = "error",
+};
+
+/* image_hide_locked() is defined with the image overlay, below. */
+static void image_hide_locked(void);
+
+static muse_ui_state_t resolve_ui_state(muse_mode_t mode, bool asleep)
+{
+    if (asleep) {
+        return MUSE_UI_SLEEPY;
+    }
+    switch (mode) {
+    case MUSE_MODE_LISTENING:
+        return MUSE_UI_LISTENING;
+    case MUSE_MODE_THINKING:
+        return MUSE_UI_THINKING;
+    case MUSE_MODE_SPEAKING:
+        return MUSE_UI_SPEAKING;
+    case MUSE_MODE_ERROR:
+        return MUSE_UI_ERROR;
+    case MUSE_MODE_OFF:
+        return MUSE_UI_SLEEPY;
+    case MUSE_MODE_BOOT:
+    case MUSE_MODE_IDLE:
+    case MUSE_MODE_COUNT:
+    default:
+        return MUSE_UI_IDLE;
+    }
+}
+
+/* The muse_mode_t the avatar/ring/meter code draws for a UI state. Sleepy
+ * keeps the underlying mode (asleep, update_sleep() skips drawing anyway;
+ * OFF awake shows GOODBYE). */
+static muse_mode_t ui_draw_mode(muse_ui_state_t st, muse_mode_t mode)
+{
+    switch (st) {
+    case MUSE_UI_LISTENING:
+        return MUSE_MODE_LISTENING;
+    case MUSE_UI_THINKING:
+        return MUSE_MODE_THINKING;
+    case MUSE_UI_SPEAKING:
+        return MUSE_MODE_SPEAKING;
+    case MUSE_UI_ERROR:
+        return MUSE_MODE_ERROR;
+    case MUSE_UI_IDLE:
+    case MUSE_UI_SLEEPY:
+    case MUSE_UI_COUNT:
+    default:
+        return mode;
+    }
+}
+
+/* State entry: transition log + the one side effect listening needs (a talk
+ * hides any pushed image and slides back to the face). Captions stay owned by
+ * the voice pipeline; sleep's panel handling stays in update_sleep(). */
+static void ui_state_enter(muse_ui_state_t from, muse_ui_state_t to)
+{
+    if (from < MUSE_UI_COUNT) {
+        ESP_LOGI(TAG, "ui state %s -> %s", UI_STATE_NAMES[from], UI_STATE_NAMES[to]);
+    } else {
+        ESP_LOGI(TAG, "ui state %s", UI_STATE_NAMES[to]);
+    }
+    if (to == MUSE_UI_LISTENING) {
+        image_hide_locked();
+        muse_ui_show_face();
+    }
+}
+
+muse_ui_state_t muse_ui_state(void)
+{
+    return s_ui_state;
+}
 
 /*
  * While Muse is thinking or speaking it shrinks to make room for the reply:
@@ -761,14 +879,15 @@ static void build_answer(lv_obj_t *face, int ring_in)
 
 static void on_ring_draw(lv_event_t *e)
 {
+    lv_obj_t *ring = lv_event_get_target_obj(e);   /* the progress ring or the volume's */
     lv_layer_t *layer = lv_event_get_layer(e);
     const lv_area_t clip = layer->_clip_area;
     lv_area_t c;
-    lv_obj_get_coords(s_ring, &c);
+    lv_obj_get_coords(ring, &c);
     int32_t cx = (c.x1 + c.x2) / 2;
     int32_t cy = (c.y1 + c.y2) / 2;
     int32_t out = lv_area_get_width(&c) / 2 + 1;                                     /* with antialiasing */
-    int32_t hole = out - 1 - lv_obj_get_style_arc_width(s_ring, LV_PART_MAIN) - 2;   /* without */
+    int32_t hole = out - 1 - lv_obj_get_style_arc_width(ring, LV_PART_MAIN) - 2;   /* without */
     lv_event_stop_processing(e);
     for (int32_t y = LV_MAX(clip.y1, cy - out); y <= LV_MIN(clip.y2, cy + out); y += RING_SLAB_ROWS) {
         int32_t y2 = LV_MIN(y + RING_SLAB_ROWS - 1, clip.y2);
@@ -787,6 +906,153 @@ static void on_ring_draw(lv_event_t *e)
         }
     }
     layer->_clip_area = clip;
+}
+
+/* Cyan over a dim track, from 12 o'clock clockwise (from the bottom on a bar). */
+static void build_volume(lv_obj_t *face)
+{
+    s_vol_step_px = LV_MAX(s_h * 5 / 100, 8);
+    if (muse_board->round) {
+        /* Over the progress ring, a little wider, while it's up. */
+        int d = LV_MIN(s_w, s_h) - 4;
+        int width = LV_MAX(d / 36, 10);
+        s_vol = lv_arc_create(face);
+        lv_obj_set_size(s_vol, d, d);
+        lv_obj_center(s_vol);
+        lv_arc_set_bg_angles(s_vol, 0, 360);
+        lv_arc_set_rotation(s_vol, 270);
+        lv_arc_set_range(s_vol, 0, 100);
+        lv_obj_remove_style(s_vol, NULL, LV_PART_KNOB);
+        lv_obj_set_style_arc_width(s_vol, width, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(s_vol, lv_color_hex(COLOR_VOL_TRACK), LV_PART_MAIN);
+        lv_obj_set_style_arc_width(s_vol, width, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_rounded(s_vol, false, LV_PART_INDICATOR);
+        lv_obj_add_event_cb(s_vol, on_ring_draw, LV_EVENT_DRAW_MAIN | LV_EVENT_PREPROCESS, NULL);
+    } else {
+        s_vol = lv_bar_create(face);
+        lv_obj_set_size(s_vol, 8, s_h * 2 / 3);
+        lv_obj_align(s_vol, LV_ALIGN_RIGHT_MID, -6, 0);
+        lv_bar_set_range(s_vol, 0, 100);
+        lv_obj_set_style_bg_color(s_vol, lv_color_hex(COLOR_VOL_TRACK), LV_PART_MAIN);
+    }
+    lv_obj_remove_flag(s_vol, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_vol, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* The arc's or bar's own opacity: a whole widget's would draw it on a layer. */
+static void set_vol_opa(void *obj, int32_t opa)
+{
+    for (int i = 0; i < 2; i++) {
+        lv_style_selector_t part = i ? LV_PART_INDICATOR : LV_PART_MAIN;
+        if (muse_board->round) {
+            lv_obj_set_style_arc_opa(obj, opa, part);
+        } else {
+            lv_obj_set_style_bg_opa(obj, opa, part);
+        }
+    }
+}
+
+static void vol_faded(lv_anim_t *a)
+{
+    lv_obj_add_flag(a->var, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void fade_volume(void)
+{
+    s_vol_hide_at = 0;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_vol);
+    lv_anim_set_exec_cb(&a, set_vol_opa);
+    lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+    lv_anim_set_duration(&a, VOL_FADE_MS);
+    lv_anim_set_completed_cb(&a, vol_faded);
+    lv_anim_start(&a);
+}
+
+static void show_volume(int v, float now)
+{
+    lv_anim_delete(s_vol, set_vol_opa);
+    set_vol_opa(s_vol, LV_OPA_COVER);
+    /* Dim with the speaker off: the level is kept for when it's back on. */
+    lv_color_t fill = lv_color_hex(muse_settings_speaker_on() ? COLOR_VOL : COLOR_DIM);
+    if (muse_board->round) {
+        lv_obj_set_style_arc_color(s_vol, fill, LV_PART_INDICATOR);
+        lv_arc_set_value(s_vol, v);
+    } else {
+        lv_obj_set_style_bg_color(s_vol, fill, LV_PART_INDICATOR);
+        lv_bar_set_value(s_vol, v, LV_ANIM_OFF);
+    }
+    lv_obj_remove_flag(s_vol, LV_OBJ_FLAG_HIDDEN);
+    s_vol_hide_at = now + VOL_SHOW_S;
+}
+
+/* A drag can start on Muse's own screen, awake, with nothing over it, and
+ * not on the speaker button, whose long press would toggle mid-drag. */
+static bool drag_can_start(lv_point_t *p)
+{
+    return !s_dark && lv_obj_has_flag(s_cover, LV_OBJ_FLAG_HIDDEN) && lv_obj_has_flag(s_pair, LV_OBJ_FLAG_HIDDEN)
+           && !s_image_dsc.data && !muse_menu_is_open() && lv_tileview_get_tile_active(s_tv) == s_face
+           && lv_obj_get_scroll_x(s_tv) == 0 && !(s_speaker && lv_indev_search_obj(s_speaker, p));
+}
+
+/*
+ * Each frame, from the touch's state: up is louder, VOL_STEP per 5% of the
+ * screen's height. The swipe to settings is horizontal and a tap is still, so
+ * a drag counts once it has gone a step mostly up or down before any
+ * scrolling; from then on LVGL ignores the touch until it lifts, so it
+ * doesn't tap Muse either. The level is heard as it changes and saved on
+ * release, like the settings slider, rather than written to flash each step.
+ */
+static void volume_drag(float now)
+{
+    if (!s_vol || !s_indev) {
+        return;
+    }
+    lv_point_t p;
+    lv_indev_get_point(s_indev, &p);
+    if (lv_indev_get_state(s_indev) != LV_INDEV_STATE_PRESSED) {
+        if (s_drag == DRAG_VOLUME) {
+            muse_settings_set_volume(s_drag_vol);
+            muse_voice_request_chirp();
+        }
+        s_drag = DRAG_NONE;
+        if (s_vol_hide_at > 0 && now >= s_vol_hide_at) {
+            fade_volume();
+        }
+        return;
+    }
+    if (s_drag == DRAG_NONE) {
+        s_drag = drag_can_start(&p) ? DRAG_WATCH : DRAG_OTHER;
+        s_drag_at = p;
+        return;
+    }
+    int dx = abs(p.x - s_drag_at.x), dy = abs(p.y - s_drag_at.y);
+    if (s_drag == DRAG_WATCH) {
+        /* A sideways move first is a swipe to settings, not a drag. */
+        if (lv_indev_get_scroll_obj(s_indev) || lv_obj_get_scroll_x(s_tv) != 0 || dx >= s_vol_step_px) {
+            s_drag = DRAG_OTHER;
+        } else if (dy >= s_vol_step_px && dy > 2 * dx) {
+            s_drag = DRAG_VOLUME;
+            s_drag_vol = muse_settings_volume();
+            lv_indev_wait_release(s_indev);
+            show_volume(s_drag_vol, now);
+        }
+    }
+    if (s_drag != DRAG_VOLUME) {
+        return;
+    }
+    int steps = (s_drag_at.y - p.y) / s_vol_step_px;
+    s_drag_at.y -= steps * s_vol_step_px;
+    int v = LV_CLAMP(0, s_drag_vol + steps * VOL_STEP, 100);
+    if (v != s_drag_vol) {
+        s_drag_vol = v;
+        muse_audio_set_volume(v);
+        muse_state_poke();
+        ESP_LOGI(TAG, "volume %d (touch)", v);
+        show_volume(v, now);
+    }
+    s_vol_hide_at = now + VOL_SHOW_S;   /* up while the finger is */
 }
 
 static void build_screen(void)
@@ -1483,14 +1749,15 @@ static void frame_tick(lv_timer_t *timer)
     float mode_t;
     muse_mode_t mode = muse_state_mode(&mode_t);
     float now = (float)esp_timer_get_time() / 1e6f;
+    volume_drag(now);   /* first: a release still saves the level whatever's on screen */
 
-    if (mode != s_last_mode) {
-        if (mode == MUSE_MODE_LISTENING) {
-            image_hide_locked();
-            muse_ui_show_face();
-        }
-        s_last_mode = mode;
+    muse_ui_state_t ui = resolve_ui_state(mode, muse_state_asleep());
+    if (ui != s_ui_state) {
+        muse_ui_state_t from = s_ui_state;
+        s_ui_state = ui;
+        ui_state_enter(from, ui);
     }
+    mode = ui_draw_mode(ui, mode);
     if (update_sleep()) {
         return;
     }
@@ -1566,6 +1833,9 @@ esp_err_t muse_ui_start(void)
     s_image_mutex = xSemaphoreCreateMutex();
     muse_board->display_lock(-1);
     build_screen();
+    if (s_face) {
+        build_volume(s_face);   /* over everything else on the face */
+    }
     if (s_settings) {
         muse_settings_ui_build(s_settings);
     } else {
