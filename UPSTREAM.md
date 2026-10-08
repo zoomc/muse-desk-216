@@ -7,7 +7,6 @@
 - 移植来源（非上游，供追溯；详见 `docs/PORTING.md`）：
   - wupsbr fork: <https://github.com/wupsbr/waveshare-muse-gadget-sdk.git> @ `2c648812feb606a85043e368e711e0ca82d61ab9`
   - box3 中文 TTS: <https://github.com/isamu2025/muse-box3-chinese-tts.git> @ `c9f03e7d9ceec6f405b2f6fd0171f9aa041d9034`
-  - muse-client（relay）: <https://github.com/wong2/muse-client.git> @ `89a3feaeac8d18f912c33f621e5f59c300b87d36`
 
 ## 同步上游（二选一）
 

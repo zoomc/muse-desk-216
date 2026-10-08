@@ -105,29 +105,14 @@ charm 的 UI 是 ESP-GSP/Mosaico 场景播放器（`companion_ui.c` L29–42 六
 
 `s_last_mode` 已由 `s_ui_state` 取代：`frame_tick` 解析→`ui_state_enter()`（切换日志 + listening 入场：清推送图、滑回头像页）→`ui_draw_mode()` 映射回 `muse_mode_t` 供头像/ring/表/字幕绘制（BOOT→idle 画 "WAKING UP"，OFF→sleepy；asleep 时 `update_sleep()` 本就跳过绘制）。
 
-## 5. relay / tts-server / secrets（第三轮）
+## 5. tts-server / secrets（第三轮）
 
 来源仓库（行号指本轮移植时来源文件的行号）：
 
-- muse-client: <https://github.com/wong2/muse-client.git> @ `89a3feaeac8d18f912c33f621e5f59c300b87d36`
 - box3 中文 TTS: <https://github.com/isamu2025/muse-box3-chinese-tts.git> @ `c9f03e7d9ceec6f405b2f6fd0171f9aa041d9034`
 - wupsbr fork: <https://github.com/wupsbr/waveshare-muse-gadget-sdk.git> @ `2c648812feb606a85043e368e711e0ca82d61ab9`
 
-### 5.1 relay（来源 muse-client，未拷源码，外部依赖）
-
-| 来源文件 | 内容 | 本仓库用法 |
-|---|---|---|
-| `src/client.ts` ~L73–93 `MuseClient.subscribe()` | 打开 `/chat/subscribe` 长订阅流 | `relay/src/relay.ts` `runOnce()` 直接调用；只取 `event === 'message.assistant'` 的成品消息 |
-| `src/events.ts` ~L13–43 `decodeChatEvents()` | NDJSON 解码 + 同流内 `seq` 去重 | 复用其语义：跨重连按 `message_id` 去重（1000 上限，`Set` 环形丢弃最老）；`display_text_ready === false` 占位跳过（判据抄 `examples/cli.ts` L41–42 `printEvent`） |
-| `src/credentials.ts` `loadCredentials`/`saveCredentials` | 配对凭据读写 + token 轮换持久化 | `runOnce()` 连接时调用，`onCredentials` 写回；`RELAY_CREDENTIALS_DIR` 覆盖默认目录 |
-| `src/connection.ts` `NoiseConnection` | 底层 multiplexed HTTP-over-Noise | 不直接用，经 `MuseClient` 间接使用 |
-
-`relay/` 自实现：断线重连 + 指数退避（初始 1s、翻倍、上限 60s、等量 jitter，`backoffDelayMs`；muse-client 不自带重连）。
-收到后只做一件事：`RELAY_WEBHOOK_URL` 置则 POST JSON `{message_id, text}`，否则打印 `Muse: <text>`。
-`package.json`  pin `muse-client` git commit（`npm install` 即装），`npm link` 备选写于 `relay/README.md`。
-诚实边界：无历史补拉，断线窗口消息永久丢失；中继只订阅不发送，无自身回声。
-
-### 5.2 tts-server（来源 box3，全文照搬 + 鉴权）
+### 5.1 tts-server（来源 box3，全文照搬 + 鉴权）
 
 | 来源文件 | 行号范围 | 改动点 | 本仓库目标文件 |
 |---|---|---|---|

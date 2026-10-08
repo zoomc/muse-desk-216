@@ -29,7 +29,7 @@ P0：
 - 中文界面（GB2312 级 CJK 字库，字幕中文正常；设置菜单保持英文）。
 
 P1：头像 tile 纵向拖拽调音量、电池剩余时间拟合、六态 UI 状态机（idle/listening/thinking/speaking/sleepy/error）、
-`relay/`（Mac mini 通知中继）、`tts-server/`（带鉴权的局域网中文语音服务）、`secrets/` 密钥机制。
+`tts-server/`（带鉴权的局域网中文语音服务）、`secrets/` 密钥机制。
 
 移植细节见 `docs/PORTING.md`，上游基线见 `UPSTREAM.md`。
 

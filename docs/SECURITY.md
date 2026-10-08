@@ -29,11 +29,3 @@
   `127.0.0.1` 跑本机。
 - token 泄漏：重生成（`python3 -c "import secrets;print(secrets.token_urlsafe(32))"`），
   服务端与 `CONFIG_MUSE_LOCAL_TTS_TOKEN` 两边一起换，旧 token 即时失效。
-
-## relay
-
-- relay 跑在 Mac mini 上，持有配对凭据（可读写你的 Muse 聊天）。凭据目录
-  权限 0700，不要多进程共用；`unpair` 只删本地文件，不解绑服务端，
-  解绑去手机 App Settings > Devices。
-- `RELAY_WEBHOOK_URL` 只填本机/可信内网地址：转发的每条助手消息原文都会
-  POST 过去。
