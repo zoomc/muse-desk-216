@@ -157,13 +157,26 @@ menu "Muse"
         depends on MUSE_ENABLED
         default n
         help
-            Captions fall back to GNU Unifont's 16x16 bitmaps for CJK
-            punctuation, kana, the CJK Unified Ideographs and fullwidth
-            forms that the ASCII caption font lacks. Small screens, whose
-            captions are two lines of 8 px text, show a reply with CJK in it
-            one 16 px line at a time. Takes about 850 KB of flash and no RAM.
-            Without it those characters show as boxes. Hangul isn't
-            included.
+            Captions fall back to the 16 px CJK bitmap (fonts/muse_font_cjk_16.c,
+            Noto Sans CJK SC subset, SIL OFL) for CJK punctuation, kana, the
+            GB2312 Han ideographs and fullwidth forms that the ASCII caption
+            font lacks. Small screens, whose captions are two lines of 8 px
+            text, show a reply with CJK in it one 16 px line at a time.
+            Without it those characters show as boxes. Rare Han outside GB2312
+            and Hangul aren't included.
+
+    config MUSE_UI_CHINESE
+        bool "Chinese interface (captions and menus)"
+        depends on MUSE_ENABLED
+        select MUSE_CJK_FONT
+        default y
+        help
+            Captions and menus link the CJK bitmap font (box3's
+            muse_font_cjk_16: 16 px Noto Sans CJK SC subset, GB2312-level
+            6990 glyphs, SIL OFL, see fonts/OFL.txt). Caption paging wraps
+            by UTF-8 code point and never splits a multibyte character
+            (muse_chat_text.c next_line). Disable for the English-only UI
+            with the smaller flash footprint.
 
     config MUSE_JC3248W535_MIC_GPIO
         int "JC3248W535: GPIO for an external I2S mic's data (SD) line"
@@ -189,5 +202,62 @@ menu "Muse"
             muse_chat_session.cpp is where a TTS API of your own can speak
             them. Needs PSRAM. Without it, voice notes go over Home Link's own
             session to its paired VM and replies are shown as text.
+
+    choice MUSE_TTS_BACKEND
+        prompt "Spoken replies (TTS backend)"
+        depends on MUSE_HATCH
+        default MUSE_TTS_BACKEND_EDGE
+        help
+            How finished replies are spoken. edge (default): a LAN edge-tts
+            server over plain HTTP, no key. elevenlabs: ElevenLabs streaming
+            MP3 over HTTPS, needs MUSE_ELEVENLABS_API_KEY. off: captions at
+            reading pace, no speech. A failed fetch never stalls: it falls
+            back to silent captions at reading pace.
+
+        config MUSE_TTS_BACKEND_EDGE
+            bool "LAN edge-tts server (default, no key)"
+
+        config MUSE_TTS_BACKEND_ELEVENLABS
+            bool "ElevenLabs streaming TTS (needs key)"
+
+        config MUSE_TTS_BACKEND_OFF
+            bool "Off (captions only)"
+    endchoice
+
+    config MUSE_LOCAL_TTS_URL
+        string "Local TTS HTTP endpoint"
+        depends on MUSE_HATCH && MUSE_TTS_BACKEND_EDGE
+        default ""
+        help
+            A trusted LAN HTTP endpoint accepting UTF-8 text with POST and
+            returning audio/mpeg. Replies are sent to this server as text
+            (Content-Type text/plain; charset=utf-8, Accept audio/mpeg).
+
+    config MUSE_ELEVENLABS_API_KEY
+        string "ElevenLabs API key for spoken replies"
+        depends on MUSE_HATCH
+        default ""
+        help
+            With a key, start_tts sends each reply's text to ElevenLabs'
+            streaming text-to-speech and plays the MP3 it returns, captions
+            following the speech. The key needs the Text to Speech
+            permission. Empty: replies stay text. Like the SDK token, the key
+            ships inside the firmware: never commit a generated sdkconfig.
+
+    config MUSE_ELEVENLABS_VOICE_ID
+        string "ElevenLabs voice ID"
+        depends on MUSE_HATCH
+        default "EXAVITQu4vr4xnSDxMaL"
+        help
+            Any voice in the account's library. The default is the premade
+            "Sarah".
+
+    config MUSE_ELEVENLABS_MODEL
+        string "ElevenLabs model"
+        depends on MUSE_HATCH
+        default "eleven_flash_v2_5"
+        help
+            eleven_flash_v2_5 answers fastest and speaks 32 languages;
+            eleven_multilingual_v2 sounds richer but starts later.
 
 endmenu
