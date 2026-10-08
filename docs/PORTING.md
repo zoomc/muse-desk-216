@@ -104,3 +104,55 @@ charm 的 UI 是 ESP-GSP/Mosaico 场景播放器（`companion_ui.c` L29–42 六
 | charm `companion_ui.c` | L197–211, L266–299 | 每态字幕/hint + 每态位移动画 | 每态屏幕表现（LVGL 原生，既有控件）：idle=READY/米色mic灭+表隐藏；listening=点亮mic+实时电平表+ring进度；thinking=spinner ring+回复布局让位；speaking=ring进度+回复页+TTS；sleepy=暗屏+触摸罩+亮度0（`update_sleep`）；error=ERROR+accent色+管线错误字幕。字幕仍归 voice 管线所有，状态机不写字幕，避免打架 |
 
 `s_last_mode` 已由 `s_ui_state` 取代：`frame_tick` 解析→`ui_state_enter()`（切换日志 + listening 入场：清推送图、滑回头像页）→`ui_draw_mode()` 映射回 `muse_mode_t` 供头像/ring/表/字幕绘制（BOOT→idle 画 "WAKING UP"，OFF→sleepy；asleep 时 `update_sleep()` 本就跳过绘制）。
+
+## 5. relay / tts-server / secrets（第三轮）
+
+来源仓库（行号指本轮移植时来源文件的行号）：
+
+- muse-client: <https://github.com/wong2/muse-client.git> @ `89a3feaeac8d18f912c33f621e5f59c300b87d36`
+- box3 中文 TTS: <https://github.com/isamu2025/muse-box3-chinese-tts.git> @ `c9f03e7d9ceec6f405b2f6fd0171f9aa041d9034`
+- wupsbr fork: <https://github.com/wupsbr/waveshare-muse-gadget-sdk.git> @ `2c648812feb606a85043e368e711e0ca82d61ab9`
+
+### 5.1 relay（来源 muse-client，未拷源码，外部依赖）
+
+| 来源文件 | 内容 | 本仓库用法 |
+|---|---|---|
+| `src/client.ts` ~L73–93 `MuseClient.subscribe()` | 打开 `/chat/subscribe` 长订阅流 | `relay/src/relay.ts` `runOnce()` 直接调用；只取 `event === 'message.assistant'` 的成品消息 |
+| `src/events.ts` ~L13–43 `decodeChatEvents()` | NDJSON 解码 + 同流内 `seq` 去重 | 复用其语义：跨重连按 `message_id` 去重（1000 上限，`Set` 环形丢弃最老）；`display_text_ready === false` 占位跳过（判据抄 `examples/cli.ts` L41–42 `printEvent`） |
+| `src/credentials.ts` `loadCredentials`/`saveCredentials` | 配对凭据读写 + token 轮换持久化 | `runOnce()` 连接时调用，`onCredentials` 写回；`RELAY_CREDENTIALS_DIR` 覆盖默认目录 |
+| `src/connection.ts` `NoiseConnection` | 底层 multiplexed HTTP-over-Noise | 不直接用，经 `MuseClient` 间接使用 |
+
+`relay/` 自实现：断线重连 + 指数退避（初始 1s、翻倍、上限 60s、等量 jitter，`backoffDelayMs`；muse-client 不自带重连）。
+收到后只做一件事：`RELAY_WEBHOOK_URL` 置则 POST JSON `{message_id, text}`，否则打印 `Muse: <text>`。
+`package.json`  pin `muse-client` git commit（`npm install` 即装），`npm link` 备选写于 `relay/README.md`。
+诚实边界：无历史补拉，断线窗口消息永久丢失；中继只订阅不发送，无自身回声。
+
+### 5.2 tts-server（来源 box3，全文照搬 + 鉴权）
+
+| 来源文件 | 行号范围 | 改动点 | 本仓库目标文件 |
+|---|---|---|---|
+| box3 `tts-server/tts_server.py` | 全文（`/health`、`POST /tts` text/plain、上游失败抛异常→设备降级字幕、`slots=Semaphore(2)`、20s 读取超时） | 原样保留；**新增**：`MUSE_TTS_TOKEN` env + `check_bearer()`（`hmac.compare_digest` 常量时间比较；`/health` 免鉴权，`/tts` 缺/错 token 回 401，服务端未配 token 回 503 fail-closed） | `tts-server/tts_server.py` |
+| box3 `tts-server/requirements.txt` | 全文（`edge-tts==7.2.8`、`fastapi==0.136.3`、`uvicorn==0.48.0`） | 无改动 | `tts-server/requirements.txt` |
+| box3 `tts-server/muse-box3-tts.env.example` | `MUSE_TTS_VOICE` + `MUSE_TTS_PROXY` | 新增 `MUSE_TTS_TOKEN=REPLACE_WITH_GENERATED_TOKEN` 占位 | `tts-server/.env.example` |
+
+设备侧配套（否则鉴权后的服务端对固件永远 401，edge 后端静默死亡）：`esp32/components/muse/muse_tts.cpp`
+`worker()` 在 URL/Accept 头之外追加 `Authorization: Bearer <CONFIG_MUSE_LOCAL_TTS_TOKEN>`（token 为空则不发，
+服务端 401 → 该条降级字幕）；`esp32/components/muse/Kconfig` 新增 `MUSE_LOCAL_TTS_TOKEN`
+（空默认，`MUSE_HATCH && MUSE_TTS_BACKEND_EDGE` 门控；`muse_tts.cpp` 仅 EDGE 后端编译，宏恒存在）。
+显示/音频驱动未动（`boards/board_waveshare_s3_216.c`、`muse_lcd_bands.c`、`muse_audio.c` 均未改）。
+
+### 5.3 secrets（来源 wupsbr，原样照搬）
+
+| 来源文件 | 内容 | 本仓库目标文件 |
+|---|---|---|
+| wupsbr `secrets/README.md` | 全文（三段式：gitignored 说明 + 文件表 + build 注入说明） | `secrets/README.md`（改动：`board.sh build <board>` 示例改为 `build s3-216` 等本仓库板名） |
+| wupsbr `secrets/muse_sdk_token.example` | `mgst_` 占位符 | `secrets/muse_sdk_token.example`（原文） |
+| wupsbr `secrets/elevenlabs_api_key.example` | `sk_` 占位符 | `secrets/elevenlabs_api_key.example`（原文） |
+| wupsbr `secrets/elevenlabs_voice_id.example` | Sarah 默认 voice id | `secrets/elevenlabs_voice_id.example`（原文） |
+| wupsbr `esp32/tools/muse/secrets.py` | 全文（`ROOT=parents[3]` 指向仓库根；三元组 `CONFIG_GADGET_SDK_TOKEN`/`CONFIG_MUSE_ELEVENLABS_API_KEY`/`CONFIG_MUSE_ELEVENLABS_VOICE_ID`） | `esp32/tools/muse/secrets.py`（逐字节相同；相对路径一致故 `parents[3]` 无需改层数，已验证指向仓库根） |
+| wupsbr `esp32/tools/muse/board.sh` L77–78 | build 时 `python3 "$root/tools/muse/secrets.py" "$B/sdkconfig"` | `esp32/tools/muse/board.sh`（同位置插入，`$root`=esp32/ 语义与来源一致） |
+
+Kconfig 名字核对：`CONFIG_GADGET_SDK_TOKEN`（`esp32/main/Kconfig.projbuild` L26）、
+`CONFIG_MUSE_ELEVENLABS_API_KEY` / `CONFIG_MUSE_ELEVENLABS_VOICE_ID`
+（`esp32/components/muse/Kconfig` L236/L247）与 `secrets.py` 三元组一致。
+`.gitignore` 加 `secrets/*` + `!secrets/README.md` + `!secrets/*.example` 取反保留模板。

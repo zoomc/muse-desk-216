@@ -75,6 +75,8 @@ if [ "$cmd" = build ]; then
     # can recreate files mid-delete, so retry.
     clean() { for _ in 1 2 3; do rm -rf managed_components dependencies.lock 2>/dev/null && return; sleep 1; done; }
     clean
+    # The SDK token and API keys, from secrets/ or the environment (never git).
+    python3 "$root/tools/muse/secrets.py" "$B/sdkconfig" || exit 1
     idf.py -B $B -DIDF_TARGET=$target -DSDKCONFIG=$B/sdkconfig \
         -DSDKCONFIG_DEFAULTS="$defaults" \
         build > $log 2>&1; rc=$?

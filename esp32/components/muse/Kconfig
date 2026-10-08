@@ -233,6 +233,17 @@ menu "Muse"
             returning audio/mpeg. Replies are sent to this server as text
             (Content-Type text/plain; charset=utf-8, Accept audio/mpeg).
 
+    config MUSE_LOCAL_TTS_TOKEN
+        string "Local TTS server token"
+        depends on MUSE_HATCH && MUSE_TTS_BACKEND_EDGE
+        default ""
+        help
+            Bearer token the LAN speech server requires on /tts (its
+            MUSE_TTS_TOKEN). Empty sends no Authorization header, which the
+            server rejects: set the same token on both sides. Like the SDK
+            token, it ships inside the firmware: never commit a generated
+            sdkconfig.
+
     config MUSE_ELEVENLABS_API_KEY
         string "ElevenLabs API key for spoken replies"
         depends on MUSE_HATCH

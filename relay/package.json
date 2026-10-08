@@ -1,0 +1,22 @@
+{
+  "name": "muse-desk-216-relay",
+  "version": "0.1.0",
+  "description": "Mac mini notification relay for muse-desk-216: subscribes to Muse chat and forwards assistant messages",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "start": "tsx src/relay.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "muse-client": "github:wong2/muse-client#89a3feaeac8d18f912c33f621e5f59c300b87d36"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

@@ -14,6 +14,36 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
+# muse-desk-216（中文说明）
+
+2.16 寸 Waveshare 桌面终端：基于 ESP32-S3（480×480 AMOLED + 触摸 + 音频），
+fork 官方 `muse-gadget-sdk`，以 `s3-216` profile 为基座移植。屏幕/音频驱动未动，只做加法。
+
+## 功能清单（P0/P1，均已实现）
+
+P0：
+
+- 双向语音对话（基座保留：按住说话 → Muse 回复字幕）。
+- All messages 主动通知（设置页顶层开关，默认**关**，省电；开关开 + 设备空闲时播报助手新消息）。
+- TTS 语音播报（双后端 Kconfig 选择：局域网 edge-tts 默认零 key 成本 / ElevenLabs 备选 / 关闭；失败降级为按阅读速度显示字幕，绝不卡死）。
+- 中文界面（GB2312 级 CJK 字库，字幕中文正常；设置菜单保持英文）。
+
+P1：头像 tile 纵向拖拽调音量、电池剩余时间拟合、六态 UI 状态机（idle/listening/thinking/speaking/sleepy/error）、
+`relay/`（Mac mini 通知中继）、`tts-server/`（带鉴权的局域网中文语音服务）、`secrets/` 密钥机制。
+
+移植细节见 `docs/PORTING.md`，上游基线见 `UPSTREAM.md`。
+
+## 构建 / 配对 / 刷机
+
+```sh
+cp secrets/muse_sdk_token.example secrets/muse_sdk_token   # 填入 mgst_…（绝不进 git）
+esp32/tools/muse/board.sh build s3-216     # 构建（自动经 secrets.py 注入密钥）
+esp32/tools/muse/board.sh flash s3-216     # 刷机
+```
+
+配对：在 Muse 手机 App（先开 Developer mode）Settings > Devices 里找 `MuseGadget-XXXXXX`，
+只在可信网络做 community pairing。ESP-IDF **v6.0.1 锁死**。安全事项见下 §Security 与 `docs/SECURITY.md`。
+
 # Muse Gadgets
 
 <p align="center">
@@ -53,6 +83,14 @@ agents like [Muse Code](https://developer.meta.com/ai/lp/muse-code/).
 Meet other hackers who are building and customizing Muse gadgets in our
 community [Discord](https://discord.gg/3bhjCkZdd6). Get inspired, support each
 other, and share what you make.
+
+## Security（安全警告）
+
+- SDK token（`mgst_…`）与 TTS key 编译进固件：**不分享 `esp32/build-*/` 与刷机镜像**；
+  泄漏后去 gadgets.muse.ai 吊销并重编重刷（详见 `docs/SECURITY.md`、`secrets/README.md`）。
+- community pairing 只在可信网络做（无厂商 attestation，防不住活跃中间人）。
+- `tts-server` 的 Bearer token 防误触发不防窃听（局域网明文 HTTP），敏感环境请走 WireGuard/尾网。
+- Jollybot 头像素材不在 Apache-2.0 内：公开发布前请替换头像素材（或先用纯色/LVGL 自绘占位）。
 
 ## License
 

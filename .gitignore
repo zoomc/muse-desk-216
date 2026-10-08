@@ -24,3 +24,9 @@ muse-simulator.ppm
 # Local gadget provisioning and original-device flash backups.
 .sdk-token
 /backups/
+
+# Per-developer secrets (see secrets/README.md): only the README and the
+# *.example templates are tracked.
+secrets/*
+!secrets/README.md
+!secrets/*.example

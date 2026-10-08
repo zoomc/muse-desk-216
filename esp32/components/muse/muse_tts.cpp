@@ -1,5 +1,6 @@
 #include "muse_tts.h"
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <new>
 #include <strings.h>
@@ -65,6 +66,14 @@ static void worker(void *arg)
     if (http) {
         esp_http_client_set_header(http, "Content-Type", "text/plain; charset=utf-8");
         esp_http_client_set_header(http, "Accept", "audio/mpeg");
+        // The speech server requires a Bearer token on /tts (see tts-server/).
+        // Empty token sends no header; the server then answers 401 and the
+        // reply falls back to captions instead of speech.
+        char auth[160] = {0};
+        if (CONFIG_MUSE_LOCAL_TTS_TOKEN[0]) {
+            snprintf(auth, sizeof(auth), "Bearer %s", CONFIG_MUSE_LOCAL_TTS_TOKEN);
+            esp_http_client_set_header(http, "Authorization", auth);
+        }
         size_t length = strlen(r->text), sent = 0;
         if (!r->cancelled && esp_http_client_open(http, length) == ESP_OK) {
             while (sent < length && !r->cancelled) {
