@@ -40,6 +40,9 @@
 #include "muse_mem.h"
 #include "muse_menu.h"
 #include "muse_pixel.h"
+#if CONFIG_MUSE_DESK_FEATURES
+#include "muse_desk.h"
+#endif
 #include "muse_settings.h"
 #include "muse_settings_ui.h"
 #include "muse_state.h"
@@ -425,6 +428,11 @@ static int32_t rect_cells(const lv_area_t *r)
 
 static void invalidate_muse(void)
 {
+#if CONFIG_MUSE_DESK_FEATURES
+    // Native-size art has detail between the legacy 64x64 dirty-grid samples.
+    lv_obj_invalidate(s_canvas);
+    return;
+#endif
     if (!s_cells) {
         lv_obj_invalidate(s_canvas);
         return;
@@ -1077,7 +1085,13 @@ static void build_screen(void)
          * shows as a different-coloured square around the character. */
         lv_obj_set_style_bg_color(s_face, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_face, LV_OPA_COVER, 0);
-        s_settings = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_LEFT);
+        s_settings = lv_tileview_add_tile(s_tv, 1, 0,
+#if CONFIG_MUSE_DESK_FEATURES
+                                          LV_DIR_HOR);
+        muse_desk_create(s_tv);
+#else
+                                          LV_DIR_LEFT);
+#endif
         face = s_face;
     }
 
@@ -1452,10 +1466,17 @@ static void update_chrome(float now)
             lv_obj_set_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE, swipe);
         }
         int shown = page * 2 + subpage;
+#if CONFIG_MUSE_DESK_FEATURES
+        if (lv_tileview_get_tile_active(s_tv) != s_face && !page) shown += 4;
+#endif
         if (shown != s_shown_page) {
             for (int i = 0; i < 2; i++) {
                 lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(i == page ? COLOR_ACCENT : COLOR_DOT_OFF), 0);
-                lv_obj_set_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN, page && subpage);
+                lv_obj_set_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN, (page && subpage)
+#if CONFIG_MUSE_DESK_FEATURES
+                    || (lv_tileview_get_tile_active(s_tv) != s_face && !page)
+#endif
+                );
             }
             s_shown_page = shown;
         }
@@ -1740,6 +1761,9 @@ void muse_ui_request_snapshot(void)
 
 static void frame_tick(lv_timer_t *timer)
 {
+#if CONFIG_MUSE_DESK_FEATURES
+    muse_desk_tick();
+#endif
     if (s_snapshot) {
         s_snapshot = false;
         send_snapshot();

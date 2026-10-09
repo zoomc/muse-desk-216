@@ -74,7 +74,7 @@ extern "C" {
 #include "muse_wifi.h"
 }
 #include "muse_chat_priv.h"
-#if CONFIG_MUSE_TTS_BACKEND_EDGE
+#if CONFIG_MUSE_TTS_BACKEND_EDGE || CONFIG_MUSE_TTS_BACKEND_MIMO
 #include "muse_tts.h"
 #endif
 
@@ -249,13 +249,13 @@ struct turn_t {
     resampler_t down;
     int kbps;
     int down_rate;
-#if CONFIG_MUSE_TTS_BACKEND_EDGE
+#if CONFIG_MUSE_TTS_BACKEND_EDGE || CONFIG_MUSE_TTS_BACKEND_MIMO
     muse_tts_request_t *local_tts;
 #endif
 };
 
 /* TTS backend selection (Kconfig choice CONFIG_MUSE_TTS_BACKEND). */
-#if CONFIG_MUSE_TTS_BACKEND_EDGE
+#if CONFIG_MUSE_TTS_BACKEND_EDGE || CONFIG_MUSE_TTS_BACKEND_MIMO
 #define MUSE_TTS_EDGE 1
 #else
 #define MUSE_TTS_EDGE 0
@@ -1807,7 +1807,7 @@ static void start_tts(void)
                 s_turn.kbps = 0;
                 s_turn.down_rate = 0;
                 mp3dec_init(&s_turn.dec);
-                ESP_LOGI(TAG, "speaking message %s (%u chars) via local TTS", m.id, (unsigned)m.len);
+                ESP_LOGI(TAG, "speaking message %s (%u chars) via HTTP TTS", m.id, (unsigned)m.len);
                 show_reply_start(m);
                 return;
             }
@@ -1965,6 +1965,44 @@ static void decode(void)
      * less, it resets and says to skip all of it, which drops speech and clicks.
      * So until the stream ends, leave the last MP3_HOLD bytes for more to arrive.
      */
+#if CONFIG_MUSE_TTS_BACKEND_MIMO
+    // MiMo returns 24kHz PCM16LE mono; preserve resampler state across chunks.
+    if (s_turn.down_rate != 24000) {
+        s_turn.down_rate = 24000;
+        resampler_init(&s_turn.down, 24000, MIC_RATE);
+        ESP_LOGI(TAG, "MiMo reply audio: 24000 Hz, mono PCM16");
+    }
+    size_t consumed = 0;
+    while (s_turn.mp3_len - consumed >= 2 && xStreamBufferSpacesAvailable(s_out) >= 2048) {
+        size_t frames = (s_turn.mp3_len - consumed) / 2;
+        if (frames > 1024) frames = 1024;
+        for (size_t j = 0; j < frames; ++j) {
+            const uint8_t *v = s_turn.mp3 + consumed + j * 2;
+            s_pcm[j] = static_cast<int16_t>(v[0] | (uint16_t(v[1]) << 8));
+        }
+        size_t n = resample(&s_turn.down, s_pcm, frames, s_pcm16);
+        if (s_turn.gen == s_gen.load()) {
+            mark(M_AUDIO);
+            xStreamBufferSend(s_out, s_pcm16, n * sizeof(int16_t), 0);
+        }
+        s_turn.pcm_out += n;
+        consumed += frames * 2;
+    }
+    if (consumed) {
+        memmove(s_turn.mp3, s_turn.mp3 + consumed, s_turn.mp3_len - consumed);
+        s_turn.mp3_len -= consumed;
+    }
+    auto &message = s_turn.msgs[s_turn.tts_msg];
+    if (s_turn.mp3_ended) {
+        message.pcm_frames = s_turn.pcm_out - message.pcm_start + s_turn.mp3_len * MIC_RATE / (2 * 24000);
+        if (s_turn.mp3_len < 2) {
+            s_turn.mp3_len = 0;
+            message.tts = TTS_FINISHED;
+            s_turn.tts_msg = -1;
+        }
+    }
+    return;
+#endif
     size_t hold = s_turn.mp3_ended ? 0 : MP3_HOLD;
     size_t off = 0;
     while (s_turn.mp3_len - off > hold &&
@@ -2581,7 +2619,7 @@ extern "C" size_t muse_hatch_turn_read(int16_t *pcm, size_t frames, int wait_ms)
 }
 
 /* Bench test: decodes the embedded test_reply.mp3 exactly as a reply is decoded. */
-static size_t mp3_selftest(int16_t **pcm_out)
+[[maybe_unused]] static size_t mp3_selftest(int16_t **pcm_out)
 {
     extern const uint8_t mp3_start[] asm("_binary_test_reply_mp3_start");
     extern const uint8_t mp3_end[] asm("_binary_test_reply_mp3_end");
@@ -2640,13 +2678,52 @@ struct selftest_t {
     size_t n;
 };
 
+#if CONFIG_MUSE_TTS_BACKEND_MIMO
+static size_t mimo_selftest(int16_t **pcm_out)
+{
+    *pcm_out = nullptr;
+    constexpr size_t cap = MIC_RATE * 20;
+    auto *out = static_cast<int16_t *>(psram_alloc(cap * sizeof(int16_t)));
+    auto *request = out ? muse_tts_begin("你好，我是你的 Muse。现在我会用温柔的声音陪你聊天。") : nullptr;
+    if (!request) { free(out); return 0; }
+    resampler_t rs;
+    resampler_init(&rs, 24000, MIC_RATE);
+    uint8_t bytes[2049];
+    int16_t samples[1024];
+    size_t n = 0, pending = 0;
+    bool ok = false;
+    int64_t deadline = now_us() + 45000000;
+    while (now_us() < deadline && n + 1024 < cap) {
+        size_t received = muse_tts_read(request, bytes + pending, 2048 - pending);
+        size_t count = received + pending;
+        for (size_t j = 0; j < count / 2; ++j) {
+            samples[j] = static_cast<int16_t>(bytes[j * 2] | (uint16_t(bytes[j * 2 + 1]) << 8));
+        }
+        n += resample(&rs, samples, count / 2, out + n);
+        pending = count & 1;
+        if (pending) bytes[0] = bytes[count - 1];
+        if (muse_tts_finished(request, &ok)) break;
+        if (!received) vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    muse_tts_close(&request);
+    if (!ok || pending) { free(out); return 0; }
+    ESP_LOGI(TAG, "MiMo speaker selftest: %u samples (%.2f s)", (unsigned)n, n / (double)MIC_RATE);
+    *pcm_out = out;
+    return n;
+}
+#endif
+
 /* minimp3 wants ~16 KB of stack, more than the voice task has. */
 extern "C" size_t muse_hatch_mp3_selftest(int16_t **pcm_out)
 {
     selftest_t st = { xTaskGetCurrentTaskHandle(), nullptr, 0 };
     auto body = [](void *arg) {
         auto *st = (selftest_t *)arg;
+#if CONFIG_MUSE_TTS_BACKEND_MIMO
+        st->n = mimo_selftest(&st->pcm);
+#else
         st->n = mp3_selftest(&st->pcm);
+#endif
         xTaskNotifyGive(st->caller);
         vTaskSuspend(NULL);   /* the caller deletes it, which frees the PSRAM stack */
     };

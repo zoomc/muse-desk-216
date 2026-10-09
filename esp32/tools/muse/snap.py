@@ -33,7 +33,13 @@ import serial
 
 SCALE = 3
 port, keys, out = sys.argv[1], sys.argv[2], sys.argv[3]
-s = serial.Serial(port, 115200, timeout=0.2)
+# Native USB JTAG also interprets DTR/RTS as reset controls. Keep both
+# released before opening; reset only when reset_wait_s explicitly requests it.
+s = serial.Serial()
+s.port, s.baudrate, s.timeout = port, 115200, 0.2
+s.dtr = False
+s.rts = False
+s.open()
 
 
 def rd(t, *until):
@@ -52,7 +58,7 @@ keys, command, line = keys.partition('>')
 for k in keys:
     s.write(k.encode()); time.sleep(0.35)
 if command:
-    s.write(f'>{line}\n'.encode()); time.sleep(0.35)
+    s.write(f'>{line}\n'.encode()); time.sleep(2)
 s.write(b'p')
 log = rd(20, b'SNAP END', b'SNAP OFF').decode('latin1')   # 20 s: a UART console at 115200 takes ~8 s for 135x240
 if 'SNAP BEGIN' not in log:

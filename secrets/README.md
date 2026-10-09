@@ -6,6 +6,7 @@ Everything in this directory is ignored by git except this file and the
 | File | What | Where to get it |
 |---|---|---|
 | `muse_sdk_token` | Muse Gadget SDK token (`mgst_…`), required to pair | [gadgets.muse.ai › SDK tokens](https://gadgets.muse.ai/settings/sdk-tokens) |
+| `mimo_api_key` | MiMo API key, required for the desk profile's spoken replies | MiMo API console |
 | `elevenlabs_api_key` | ElevenLabs API key (`sk_…`), optional: spoken replies | [elevenlabs.io › API keys](https://elevenlabs.io/app/settings/api-keys), with the **Text to Speech** permission |
 | `elevenlabs_voice_id` | ElevenLabs voice, optional (default: Sarah) | any voice ID in your ElevenLabs library |
 
@@ -17,7 +18,7 @@ chmod 600 secrets/*
 `esp32/tools/muse/board.sh build <board>` (e.g. `build s3-216`) copies them
 into that build's generated `sdkconfig` through
 `esp32/tools/muse/secrets.py`. Environment variables (`MUSE_SDK_TOKEN`,
-`ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`) win over the files, which suits
+`MIMO_API_KEY`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`) win over the files, which suits
 CI.
 
 Both secrets end up inside the firmware image. Treat a flashed board and its

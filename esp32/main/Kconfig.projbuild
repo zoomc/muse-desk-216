@@ -59,6 +59,25 @@ menu "ESP32 Device SDK"
             Password for CONFIG_HOMEHUB_WIFI_SSID. Ignored when the SSID
             override is empty.
 
+    config HOMEHUB_WIFI_CUSTOM_ROUTE
+        bool "Override Wi-Fi gateway and DNS while keeping DHCP"
+        default n
+        help
+            Apply a custom IPv4 gateway and DNS after DHCP acquisition and
+            renewal. IP address and subnet mask remain supplied by DHCP.
+            The gateway must be in the station's subnet. On other networks,
+            keep the DHCP route and DNS instead.
+
+    config HOMEHUB_WIFI_GATEWAY
+        string "Wi-Fi IPv4 gateway override"
+        depends on HOMEHUB_WIFI_CUSTOM_ROUTE
+        default "192.168.5.2"
+
+    config HOMEHUB_WIFI_DNS
+        string "Wi-Fi IPv4 DNS override"
+        depends on HOMEHUB_WIFI_CUSTOM_ROUTE
+        default "198.18.0.2"
+
     config HOMEHUB_TOKEN_REFRESH_INTERVAL_DAYS
         int "Proactive device token refresh interval (days, 0 = disabled)"
         range 0 365

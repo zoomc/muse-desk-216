@@ -203,6 +203,14 @@ menu "Muse"
             them. Needs PSRAM. Without it, voice notes go over Home Link's own
             session to its paired VM and replies are shown as text.
 
+    config MUSE_DESK_FEATURES
+        bool "HD anime, Pomodoro and Dalian weather"
+        depends on MUSE_BOARD_WAVESHARE_S3_216 && SPIRAM
+        default n
+        help
+            Native-resolution anime pictures, a Pomodoro focus timer,
+            and directly fetched Dalian weather. Keeps the original settings UI.
+
     choice MUSE_TTS_BACKEND
         prompt "Spoken replies (TTS backend)"
         depends on MUSE_HATCH
@@ -217,12 +225,35 @@ menu "Muse"
         config MUSE_TTS_BACKEND_EDGE
             bool "LAN edge-tts server (default, no key)"
 
+        config MUSE_TTS_BACKEND_MIMO
+            bool "Xiaomi MiMo streaming TTS (needs key)"
+
         config MUSE_TTS_BACKEND_ELEVENLABS
             bool "ElevenLabs streaming TTS (needs key)"
 
         config MUSE_TTS_BACKEND_OFF
             bool "Off (captions only)"
     endchoice
+
+    config MUSE_MIMO_API_KEY
+        string "MiMo API key"
+        depends on MUSE_TTS_BACKEND_MIMO
+        default ""
+
+    config MUSE_MIMO_URL
+        string "MiMo chat completions endpoint"
+        depends on MUSE_TTS_BACKEND_MIMO
+        default "https://api.xiaomimimo.com/v1/chat/completions"
+
+    config MUSE_MIMO_VOICE
+        string "MiMo voice"
+        depends on MUSE_TTS_BACKEND_MIMO
+        default "茉莉"
+
+    config MUSE_MIMO_STYLE
+        string "MiMo speaking style"
+        depends on MUSE_TTS_BACKEND_MIMO
+        default "用温柔、自然的中文女声说话，语速稍慢，咬字清晰，像亲切的日常交谈。"
 
     config MUSE_LOCAL_TTS_URL
         string "Local TTS HTTP endpoint"

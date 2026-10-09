@@ -44,7 +44,7 @@ if(CONFIG_MUSE_ENABLED)
         "muse_ble.c")
     if(CONFIG_MUSE_HATCH)
         list(APPEND srcs "muse_chat.c" "muse_account_api.c" "muse_chat_session.cpp")
-        if(CONFIG_MUSE_TTS_BACKEND_EDGE)
+        if(CONFIG_MUSE_TTS_BACKEND_EDGE OR CONFIG_MUSE_TTS_BACKEND_MIMO)
             list(APPEND srcs "muse_tts.cpp")   # LAN edge-tts worker (PSRAM buffers)
         endif()
         list(APPEND embed "test_reply.mp3")   # muse_hatch_mp3_selftest
@@ -59,7 +59,9 @@ if(CONFIG_MUSE_ENABLED)
     # avatar when avatar/muse_pixel.c exists here; this avatar/ is gitignored. The
     # default is in avatar/ at the top of the project.
     file(GLOB custom_avatar CONFIGURE_DEPENDS "${COMPONENT_DIR}/avatar/muse_pixel.c")
-    if(custom_avatar)
+    if(CONFIG_MUSE_DESK_FEATURES)
+        list(APPEND srcs "muse_hd_avatar.c" "muse_desk.c" "muse_desk_timer.c" "muse_weather.c" "muse_weather_parse.c")
+    elseif(custom_avatar)
         message(STATUS "Custom avatar: components/muse/avatar/muse_pixel.c")
         list(APPEND srcs "avatar/muse_pixel.c")
     else()
@@ -114,7 +116,7 @@ elseif(CONFIG_HOMEHUB_VOICE)
 endif()
 
 set(muse_priv_requires
-    esp_timer esp_driver_usb_serial_jtag esp_psram nvs_flash
+    esp_timer esp_driver_usb_serial_jtag esp_psram nvs_flash esp_netif
     bt esp-tls mbedtls esp_app_format esp_http_client
     noise_core minimp3
     esp_lcd esp_adc esp_driver_i2s esp_driver_ledc esp_driver_spi esp_driver_uart esp_wifi

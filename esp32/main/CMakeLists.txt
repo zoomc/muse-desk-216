@@ -17,6 +17,7 @@ set(GADGET_SRCS
     "app.c"
     "ble_server.c"
     "wifi_mgr.c"
+    "wifi_route.c"
     "wifi_known.c"
     "identity.c"
     "config_store.c"

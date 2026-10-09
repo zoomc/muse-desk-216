@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[3]
 SECRETS = (
     # (Kconfig option, environment variable, file in secrets/)
     ("CONFIG_GADGET_SDK_TOKEN", "MUSE_SDK_TOKEN", "muse_sdk_token"),
+    ("CONFIG_MUSE_MIMO_API_KEY", "MIMO_API_KEY", "mimo_api_key"),
     ("CONFIG_MUSE_ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY", "elevenlabs_api_key"),
     ("CONFIG_MUSE_ELEVENLABS_VOICE_ID", "ELEVENLABS_VOICE_ID", "elevenlabs_voice_id"),
 )

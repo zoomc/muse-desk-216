@@ -43,6 +43,9 @@
 #include "muse_ui.h"
 #include "muse_voice.h"
 #include "muse_wifi.h"
+#if CONFIG_MUSE_DESK_FEATURES
+#include "muse_desk.h"
+#endif
 #if CONFIG_MUSE_WATCHER_CAMERA
 #include "boards/watcher_camera.h"
 #endif
@@ -570,6 +573,9 @@ static void set_face(const char *name)
  */
 static bool console_command(char *line, bool whole)
 {
+#if CONFIG_MUSE_DESK_FEATURES
+    if (whole && muse_desk_command(line)) return true;
+#endif
     if (!strcmp(line, "status")) {
         size_t cap = 1024;   /* long SSID, host and VM names escaped: past 512 */
         char *json = heap_caps_malloc(cap, MUSE_BIG_CAPS);
