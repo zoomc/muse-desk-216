@@ -49,5 +49,53 @@ int main() {
             subprocess.run([str(exe)],check=True)
 
 
+    def test_stopped_consumer_times_out_and_partial_writes_progress(self):
+        source = (ROOT / 'components/muse/muse_tts.cpp').read_text(encoding='utf-8')
+        start = source.index('static bool audio_line(')
+        end = source.index('static void worker(', start)
+        functions = source[start:end]
+        harness = r'''
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <cassert>
+#include "cJSON.h"
+#define ESP_LOGW(...) ((void)0)
+#define pdMS_TO_TICKS(ms) (ms)
+static int64_t clock_us;
+static int sends, mode;
+struct muse_tts_request_t { bool cancelled; void *bytes; };
+static int64_t esp_timer_get_time() { return clock_us; }
+static size_t xStreamBufferSend(void *, const void *, size_t n, int) {
+    ++sends; clock_us += 100000;
+    return mode==1 ? (n>2 ? 2 : n) : 0;
+}
+static int mbedtls_base64_decode(unsigned char *out, size_t, size_t *n, const unsigned char *, size_t) {
+    *n=8; memset(out,0,8); return 0;
+}
+FUNCTIONS
+int main() {
+    muse_tts_request_t r{};
+    const char *json="data: {\"choices\":[{\"delta\":{\"audio\":{\"data\":\"AAAAAAAAAAAA\"}}}]}";
+    char line[256]; size_t total=0; bool done=false;
+    strcpy(line,json); mode=0;
+    assert(!audio_line(&r,line,total,done));
+    assert(total==0 && clock_us>15000000 && sends<=152);
+    mode=1; sends=0; total=0; strcpy(line,json);
+    assert(audio_line(&r,line,total,done)); assert(total==8 && sends==4);
+    r.cancelled=true; sends=0; total=0; strcpy(line,json);
+    assert(audio_line(&r,line,total,done)); assert(total==0 && sends==0);
+    strcpy(line,"data: [DONE]"); assert(audio_line(&r,line,total,done) && done);
+}
+'''.replace('FUNCTIONS',functions)
+        with tempfile.TemporaryDirectory() as tmp:
+            cpp=Path(tmp)/'stall.cpp'; obj=Path(tmp)/'json.o'; exe=Path(tmp)/'stall.exe'
+            cpp.write_text(harness,encoding='utf-8')
+            jsondir=ROOT/'managed_components/espressif__cjson/cJSON'
+            subprocess.run([os.getenv('CC','cc'),'-I',str(jsondir),'-c',str(jsondir/'cJSON.c'),'-o',str(obj)],check=True)
+            subprocess.run([os.getenv('CXX','c++'),'-std=c++17','-Wall','-Wextra','-Werror','-I',str(jsondir),str(cpp),str(obj),'-o',str(exe)],check=True)
+            subprocess.run([str(exe)],check=True)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -95,11 +95,14 @@ static int build_status(char *out, size_t len)
                     "\"wifi\":{\"on\":%s,\"state\":\"%s\",\"ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d},"
                     "\"hatch\":{\"host\":\"%s\",\"vm\":\"%s\",\"token\":%s,\"state\":\"%s\"},"
                     "\"link\":{\"paired\":%s,\"state\":\"%s\"},"
+                    "\"messages\":{\"all\":%s,\"own_only\":%s,\"quiet_night\":%s},"
                     "\"volume\":%d,\"speaker\":%s,\"mic_gain\":%d,\"brightness\":%d,\"sleep\":%d,\"last\":\"%s\"}",
                     s_name, esp_app_get_description()->version, p.battery_pct,
                     muse_settings_wifi_on() ? "true" : "false", wifi_state_name(w.state), ssid_e, w.ip, w.rssi,
                     host_e, vm_e, muse_settings_hatch_token_len() ? "true" : "false", muse_hatch_state_name(h.state),
                     muse_link_hatch_linked() ? "true" : "false", muse_link_state_name(muse_link_state()),
+                    muse_settings_pushes_on() ? "true" : "false", muse_settings_own_only() ? "true" : "false",
+                    muse_settings_quiet_night() ? "true" : "false",
                     muse_settings_volume(), muse_settings_speaker_on() ? "true" : "false",
                     muse_settings_mic_gain(), muse_settings_brightness(),
                     muse_settings_sleep_s(), last_e);
@@ -165,6 +168,12 @@ static void run_command(char *cmd)
         muse_settings_set_volume(n);
     } else if (!strcmp(cmd, "speaker") && parse_int(v, 0, 1, &n)) {
         muse_settings_set_speaker_on(n);
+    } else if (!strcmp(cmd, "messages.own_only") && parse_int(v, 0, 1, &n)) {
+        muse_settings_set_own_only(n);
+    } else if (!strcmp(cmd, "messages.quiet_night") && parse_int(v, 0, 1, &n)) {
+        muse_settings_set_quiet_night(n);
+    } else if (!strcmp(cmd, "messages.all") && parse_int(v, 0, 1, &n)) {
+        muse_settings_set_pushes_on(n);
     } else if (!strcmp(cmd, "mic_gain") && parse_int(v, 0, MUSE_MIC_GAIN_MAX, &n)) {
         muse_settings_set_mic_gain(n);
     } else if (!strcmp(cmd, "brightness") && parse_int(v, 10, 100, &n)) {

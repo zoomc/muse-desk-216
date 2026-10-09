@@ -35,6 +35,8 @@ static struct {
     uint8_t volume;
     bool speaker_on;
     bool pushes_on;
+    bool own_only;
+    bool quiet_night;
     uint8_t mic_gain;
     uint8_t brightness;
     uint16_t sleep_s;
@@ -48,6 +50,8 @@ static struct {
 } s = {
     .volume = CONFIG_MUSE_DEFAULT_VOLUME,
     .speaker_on = true,
+    .own_only = true,
+    .quiet_night = true,
     .mic_gain = 30,
     .brightness = 100,
     .sleep_s = 120,
@@ -123,6 +127,8 @@ esp_err_t muse_settings_init(void)
         s.pushes_on = b;
     }
     load_u8("mic_gain", &s.mic_gain);
+    if (nvs_get_u8(s_nvs, "own_only", &b) == ESP_OK) s.own_only = b;
+    if (nvs_get_u8(s_nvs, "quiet_night", &b) == ESP_OK) s.quiet_night = b;
     load_u8("bright", &s.brightness);
     nvs_get_u16(s_nvs, "sleep_s", &s.sleep_s);
     if (nvs_get_u8(s_nvs, "wifi_on", &b) == ESP_OK) {
@@ -155,6 +161,8 @@ void muse_settings_set_listener(muse_setting_cb_t cb)
 int muse_settings_volume(void) { return s.volume; }
 bool muse_settings_speaker_on(void) { return s.speaker_on; }
 bool muse_settings_pushes_on(void) { return s.pushes_on; }
+bool muse_settings_own_only(void) { return s.own_only; }
+bool muse_settings_quiet_night(void) { return s.quiet_night; }
 int muse_settings_mic_gain(void) { return s.mic_gain; }
 int muse_settings_brightness(void) { return s.brightness; }
 int muse_settings_sleep_s(void) { return s.sleep_s; }
@@ -223,6 +231,15 @@ void muse_settings_set_mic_gain(int db)
     s.mic_gain = clampi(db, 0, MUSE_MIC_GAIN_MAX);
     save_u8("mic_gain", s.mic_gain);
     notify(MUSE_SETTING_MIC_GAIN);
+}
+
+void muse_settings_set_own_only(bool on)
+{
+    s.own_only = on; save_u8("own_only", on); notify(MUSE_SETTING_PUSHES);
+}
+void muse_settings_set_quiet_night(bool on)
+{
+    s.quiet_night = on; save_u8("quiet_night", on); notify(MUSE_SETTING_PUSHES);
 }
 
 void muse_settings_set_brightness(int pct)

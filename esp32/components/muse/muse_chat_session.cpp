@@ -70,6 +70,8 @@ extern "C" {
 #include "muse_account_api.h"
 #include "muse_link.h"
 #include "muse_settings.h"
+#include "muse_message_policy.h"
+#include <time.h>
 #include "muse_state.h"
 #include "muse_wifi.h"
 }
@@ -219,6 +221,7 @@ struct turn_t {
     phase_t phase;
     uint32_t gen;
     bool text;               /* typed at the console: the reply goes there, unspoken */
+    bool unsolicited;
     bool end_requested, end_sent, chat_posted, acked;
     int64_t dict_id, chat_id;
     int64_t start_us, end_sent_us, chat_us, last_event_us, last_content_us;
@@ -1336,6 +1339,12 @@ static void on_dictation_end(bool ok)
 
 /* ---- Turn: reply ---- */
 
+static bool background_messages_allowed(void)
+{
+    return muse_push_allowed(muse_settings_pushes_on(), muse_settings_own_only(),
+                             muse_settings_quiet_night(), time(nullptr));
+}
+
 static int find_msg(const char *id)
 {
     for (int i = 0; i < s_turn.nmsgs; i++) {
@@ -1365,6 +1374,14 @@ static int bind_msg(const char *id, cJSON *payload)
     if (!parent) {
         parent = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "parent_message_id"));
     }
+    bool matches = parent && (is_user_id(parent) || find_msg(parent) >= 0);
+    if (!muse_reply_allowed(muse_settings_own_only(), false, s_turn.acked, parent && parent[0], matches)) {
+        /* No replies before our send ACK; known foreign parents are rejected. */
+        ESP_LOGI(TAG, "privacy: unverified reply suppressed (acked=%d, parent=%d)", s_turn.acked, parent && parent[0]);
+        return -1;
+    }
+    if (muse_settings_own_only() && (!parent || !parent[0]) && !s_turn.nmsgs)
+        ESP_LOGW(TAG, "privacy: source missing; reply limited to active device request window");
     /* Once the ack names our message, replies to anything else are someone else's. */
     if (parent && parent[0] && s_turn.acked && !is_user_id(parent) && find_msg(parent) < 0) {
         muse_chat_reject(&s_turn.rejected, id);
@@ -1468,8 +1485,10 @@ static const char *msg_id(cJSON *payload, cJSON *event)
 
 static void push_begin(const char *id)
 {
-    if (!muse_settings_pushes_on()) {
-        ESP_LOGI(TAG, "push: message %s left for the app (All messages is off)", id);
+    (void)id;
+    if (!muse_push_allowed(muse_settings_pushes_on(), muse_settings_own_only(),
+                           muse_settings_quiet_night(), time(nullptr))) {
+        ESP_LOGI(TAG, "privacy: unsolicited message left for the app");
         return;
     }
     /* Only between turns, with the voice task free to play it. */
@@ -1482,6 +1501,7 @@ static void push_begin(const char *id)
         return;
     }
     s_turn.phase = P_WAIT_REPLY;
+    s_turn.unsolicited = true;
     s_turn.chat_us = s_turn.last_event_us = now_us();
     s_push_pending = true;
     ESP_LOGI(TAG, "push: message %s with no turn waiting, playing it", id);
@@ -2345,6 +2365,7 @@ static void handle(const cmd_t &cmd)
     }
 }
 
+static void drain_out(void);
 static void hatch_task(void *arg)
 {
     (void)arg;
@@ -2366,7 +2387,7 @@ static void hatch_task(void *arg)
                 s_auto_next_us = 0;
                 s_auto_backoff_us = AUTO_RETRY_MIN_US;
             } else if (muse_hatch_configured()
-                       && (now_us() >= s_auto_next_us || (s_auto_next_us == INT64_MAX && muse_settings_pushes_on()))) {
+                       && (now_us() >= s_auto_next_us || (s_auto_next_us == INT64_MAX && background_messages_allowed()))) {
                 /* Closed when idle, then All messages turned on: connect again for pushes. */
                 if (ensure_connected()) {
                     s_auto_next_us = INT64_MAX;   /* until it drops */
@@ -2384,6 +2405,12 @@ static void hatch_task(void *arg)
         if (s_resting && !muse_wifi_connected()) {
             drop_connection("Wi-Fi down");
             continue;
+        }
+        if (s_turn.phase != P_IDLE && s_turn.unsolicited && !background_messages_allowed()) {
+            ESP_LOGI(TAG, "privacy: stopping unsolicited playback");
+            s_push_pending = false;
+            drain_out();
+            turn_done(false);
         }
         if (!poll_socket()) {
             drop_connection("receive failed");
@@ -2415,7 +2442,7 @@ static void hatch_task(void *arg)
         int64_t t = now_us();
         if (t - s_conn.last_rx_us > DEAD_US) {
             drop_connection("server went quiet");
-        } else if (s_turn.phase == P_IDLE && t - s_conn.last_use_us > IDLE_CLOSE_US && !muse_settings_pushes_on()) {
+        } else if (s_turn.phase == P_IDLE && t - s_conn.last_use_us > IDLE_CLOSE_US && !background_messages_allowed()) {
             /* With All messages on it stays up, battery or not, so pushes keep arriving. */
             disconnect("idle");
             muse_hatch_report(MUSE_HATCH_UNTESTED, "");

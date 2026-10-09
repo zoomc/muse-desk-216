@@ -149,8 +149,15 @@ static bool audio_line(muse_tts_request_t *r, char *line, size_t &total, bool &d
         ok = mbedtls_base64_decode(pcm, length, &count, pcm, length) == 0;
         if (ok) {
             size_t off = 0;
+            int64_t progress = esp_timer_get_time();
             while (off < count && !r->cancelled) {
-                off += xStreamBufferSend(r->bytes, pcm + off, count - off, pdMS_TO_TICKS(100));
+                size_t n = xStreamBufferSend(r->bytes, pcm + off, count - off, pdMS_TO_TICKS(100));
+                off += n;
+                if (n) progress = esp_timer_get_time();
+                else if (esp_timer_get_time() - progress > 15000000LL) {
+                    ESP_LOGW(TAG, "MiMo audio consumer stalled; ending request");
+                    ok = false; break;
+                }
             }
             total += off;
         }
@@ -208,9 +215,10 @@ static void worker(void *arg)
                 if (status == 200) {
                     esp_http_client_set_timeout_ms(http, 500);
                     int64_t last = esp_timer_get_time();
+                    int64_t deadline = last + 180000000LL;
                     char chunk[2048];
                     bool valid = true;
-                    while (!r->cancelled && !done && valid) {
+                    while (!r->cancelled && !done && valid && esp_timer_get_time() < deadline) {
                         int n = esp_http_client_read(http, chunk, sizeof(chunk));
                         if (n > 0) {
                             for (int i = 0; i < n && valid && !done; ++i) {

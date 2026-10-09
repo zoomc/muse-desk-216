@@ -23,7 +23,7 @@ class ChatSession(unittest.TestCase):
         source = (ROOT / 'components/muse/muse_chat_session.cpp').read_text()
         constants = source[source.index('#define MIC_RATE'):source.index('/* ---- Voice task')]
         types = source[source.index('enum phase_t'):source.index('/* 10 KB')]
-        handlers = source[source.index('static int find_msg('):source.index('static void on_chat_ack(')]
+        handlers = source[source.index('static bool background_messages_allowed('):source.index('static void on_chat_ack(')]
         reset = source[source.index('static bool turn_start('):source.index('static void turn_begin(')]
         code = r'''
 #include <cassert>
@@ -32,16 +32,29 @@ class ChatSession(unittest.TestCase):
 #include <cstdlib>
 #include <cstring>
 #include <initializer_list>
+#include <atomic>
+#include <ctime>
+#include "muse_message_policy.h"
 #include "host_compat.h"
 #include "cJSON.h"
 #include "minimp3.h"
 #include "muse_chat_priv.h"
 #define ESP_LOGI(...) ((void)0)
+#define ESP_LOGW(...) ((void)0)
 ''' + constants + types + r'''
 static turn_t s_turn;
 static char s_reply_shown[EV_TEXT];
 static int64_t s_last_seq, s_marks[4];
 static int captions, console_events;
+static bool own_only;
+static bool muse_settings_own_only() { return own_only; }
+static bool muse_settings_pushes_on() { return false; }
+static bool muse_settings_quiet_night() { return true; }
+static bool was_shown(const char *) { return false; }
+static int muse_state_mode(void *) { return 0; }
+#define MUSE_MODE_IDLE 0
+static std::atomic<bool> s_push_pending{false};
+static std::atomic<uint32_t> s_gen{0};
 enum mark_t { M_TEXT, M_DONE };
 static void mark(mark_t) {}
 static int64_t now_us() { return 12345; }
@@ -128,12 +141,32 @@ static void bounded_rejections() {
     event("message.assistant", "second", "note", "Second");
     assert(s_turn.nmsgs == 2 && s_turn.msgs[0].done && s_turn.msgs[1].done);
 }
+static void strict_privacy() {
+    own_only = true;
+    assert(!background_messages_allowed());
+    begin(); s_turn.acked = false;
+    event("message.assistant", "phone", "", "Private phone text");
+    event("message.assistant", "foreign", "different-user", "Foreign");
+    assert(s_turn.nmsgs == 0 && captions == 0);
+    s_turn.acked = false;
+    event("message.assistant", "early", "note", "Early");
+    assert(s_turn.nmsgs == 0);
+    s_turn.acked = true;
+    event("delta.message_start", "ours", "note");
+    event("delta.text_append", "ours", "", "Our reply");
+    event("delta.message_done", "ours");
+    assert(s_turn.nmsgs == 1 && s_turn.msgs[0].done && captions == 1);
+    event("message.assistant", "late", "ours", "Follow-up");
+    assert(s_turn.nmsgs == 2);
+    own_only = false;
+}
 int main(int argc, char **argv) {
     assert(argc == 2);
     switch (atoi(argv[1])) {
     case 0: rejected_deltas(); break;
     case 1: valid_parents(); break;
     case 2: bounded_rejections(); break;
+    case 3: strict_privacy(); break;
     default: return 2;
     }
 }
@@ -166,3 +199,6 @@ int main(int argc, char **argv) {
 
     def test_rejection_capacity_preserves_correlation(self):
         self.run_case(2)
+
+    def test_device_window_requires_ack_and_rejects_known_foreign_parent(self):
+        self.run_case(3)

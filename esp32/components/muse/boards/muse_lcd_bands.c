@@ -22,6 +22,9 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
+#include "esp_system.h"
+#include "esp_attr.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -35,6 +38,13 @@ typedef struct {
 } band_t;
 
 static const char *TAG = "lcd_bands";
+static RTC_NOINIT_ATTR uint32_t s_timeout_magic, s_timeout_reason;
+static void lcd_timeout(uint32_t reason)
+{
+    s_timeout_magic = 0x4c434454; s_timeout_reason = reason;
+    ESP_LOGE(TAG, "LCD wait timed out (%lu); restarting without erasing settings", (unsigned long)reason);
+    esp_restart();
+}
 
 static lv_display_t *s_disp;
 static esp_lcd_panel_handle_t s_panel;
@@ -48,12 +58,25 @@ static uint8_t *s_chunk[2];
 static size_t s_chunk_bytes;
 static int s_chunks_out;                 /* of the band being sent */
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
+static int64_t s_pending_since_us;
+
+/* Independent of the sender: also catches a blocked SPI driver or a lost
+ * final DMA completion, where the sender cannot reach its own timeout. */
+static void lcd_health_check(void *arg)
+{
+    (void)arg;
+    portENTER_CRITICAL(&s_lock);
+    int64_t since = s_pending_since_us;
+    portEXIT_CRITICAL(&s_lock);
+    if (since && esp_timer_get_time() - since > 10000000) lcd_timeout(5);
+}
 
 /* A piece has gone, or failed to; true if it was the band's last. */
 static bool IRAM_ATTR chunk_done(void)
 {
     portENTER_CRITICAL_SAFE(&s_lock);
     bool last = s_chunks_out > 0 && --s_chunks_out == 0;
+    if (last) s_pending_since_us = 0;
     portEXIT_CRITICAL_SAFE(&s_lock);
     return last;
 }
@@ -76,7 +99,14 @@ static esp_err_t queue_band(lv_display_t *disp, esp_lcd_panel_handle_t panel, in
     (void)panel;
     (void)ctx;
     band_t b = { data, x1, y1, x2, y2 };
-    return xQueueSend(s_bands, &b, 0) == pdTRUE ? ESP_OK : ESP_FAIL;
+    portENTER_CRITICAL(&s_lock);
+    s_pending_since_us = esp_timer_get_time();
+    portEXIT_CRITICAL(&s_lock);
+    if (xQueueSend(s_bands, &b, 0) == pdTRUE) return ESP_OK;
+    portENTER_CRITICAL(&s_lock);
+    s_pending_since_us = 0;
+    portEXIT_CRITICAL(&s_lock);
+    return ESP_FAIL;
 }
 
 /*
@@ -103,7 +133,7 @@ static void send_bands(void *arg)
         s_chunks_out = (b.y2 - b.y1 + rows - 1) / rows;
         for (int y = b.y1; y < b.y2; y += rows) {
             int h = b.y2 - y < rows ? b.y2 - y : rows;
-            xSemaphoreTake(s_chunk_free, portMAX_DELAY);
+            if (xSemaphoreTake(s_chunk_free, pdMS_TO_TICKS(5000)) != pdTRUE) lcd_timeout(1);
             memcpy(s_chunk[k], b.data + (size_t)(y - b.y1) * row, h * row);
             esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, b.x1, y, b.x2, y + h, s_chunk[k]);
             if (err != ESP_OK) {
@@ -120,6 +150,10 @@ static void send_bands(void *arg)
 lv_display_t *muse_lcd_bands_register(esp_lv_adapter_display_config_t cfg, int lines, size_t chunk_bytes)
 {
     s_panel = cfg.panel;
+    if (s_timeout_magic == 0x4c434454) {
+        ESP_LOGW(TAG, "previous boot recovered from LCD timeout (%lu)", (unsigned long)s_timeout_reason);
+        s_timeout_magic = 0;
+    }
     s_chunk_bytes = chunk_bytes;
     if (xTaskGetCoreID(xTaskGetCurrentTaskHandle()) != MUSE_UI_CORE) {
         ESP_LOGE(TAG, "not pinned to core %d: the panel's SPI interrupt can strand the send task", MUSE_UI_CORE);
@@ -134,6 +168,10 @@ lv_display_t *muse_lcd_bands_register(esp_lv_adapter_display_config_t cfg, int l
         xTaskCreatePinnedToCore(send_bands, "lcd_send", 2560, NULL, MUSE_UI_PRIORITY + 1, NULL, MUSE_UI_CORE) != pdPASS) {
         return NULL;
     }
+    esp_timer_handle_t health_timer;
+    const esp_timer_create_args_t health_args = { .callback = lcd_health_check, .name = "lcd_health" };
+    ESP_ERROR_CHECK(esp_timer_create(&health_args, &health_timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(health_timer, 1000000));
     const esp_lcd_panel_io_callbacks_t io_cbs = { .on_color_trans_done = on_chunk_sent };
     esp_lcd_panel_io_register_event_callbacks(cfg.panel_io, &io_cbs, NULL);
     esp_lv_adapter_set_default_display_idf_callback_registration_enabled(false);
@@ -157,11 +195,11 @@ void muse_lcd_bands_run(void (*fn)(void *arg), void *arg)
         fn(arg);
         return;
     }
-    xSemaphoreTake(s_call_lock, portMAX_DELAY);
+    if (xSemaphoreTake(s_call_lock, pdMS_TO_TICKS(5000)) != pdTRUE) lcd_timeout(2);
     s_call = fn;
     s_call_arg = arg;
     const band_t call = { 0 };
-    xQueueSend(s_bands, &call, portMAX_DELAY);
-    xSemaphoreTake(s_call_done, portMAX_DELAY);
+    if (xQueueSend(s_bands, &call, pdMS_TO_TICKS(5000)) != pdTRUE) lcd_timeout(3);
+    if (xSemaphoreTake(s_call_done, pdMS_TO_TICKS(5000)) != pdTRUE) lcd_timeout(4);
     xSemaphoreGive(s_call_lock);
 }

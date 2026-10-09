@@ -36,7 +36,8 @@ bool muse_console_getc(uint8_t *c)
 
 void muse_console_write(const void *buf, size_t n)
 {
-    usb_serial_jtag_write_bytes(buf, n, portMAX_DELAY);
+    /* A disconnected/non-reading host must never strand the UI or chat task. */
+    usb_serial_jtag_write_bytes(buf, n, pdMS_TO_TICKS(100));
 }
 
 bool muse_console_host(void)

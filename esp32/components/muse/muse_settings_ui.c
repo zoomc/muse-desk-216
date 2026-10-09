@@ -74,6 +74,7 @@ typedef struct {
 
 /* Home values. */
 static lv_obj_t *s_home_wifi, *s_home_hatch, *s_home_pushes, *s_home_ble, *s_home_sound, *s_home_sleep, *s_home_battery, *s_about;
+static lv_obj_t *s_own_sw, *s_quiet_sw;
 
 /* Wi-Fi page. */
 static lv_obj_t *s_wifi_sw, *s_wifi_status, *s_wifi_saved, *s_wifi_scan_btn, *s_wifi_scan_lbl, *s_wifi_list;
@@ -1280,6 +1281,14 @@ static void on_pushes_sw(lv_event_t *e)
 {
     muse_settings_set_pushes_on(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
 }
+static void on_own_sw(lv_event_t *e)
+{
+    muse_settings_set_own_only(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+}
+static void on_quiet_sw(lv_event_t *e)
+{
+    muse_settings_set_quiet_night(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+}
 
 static void build_home(lv_obj_t *tile)
 {
@@ -1288,6 +1297,9 @@ static void build_home(lv_obj_t *tile)
     row(list, LV_SYMBOL_WIFI, "Wi-Fi", &s_home_wifi, on_nav, (void *)&WIFI);
     row(list, LV_SYMBOL_HOME, "Muse", &s_home_hatch, on_nav, (void *)&HATCH);
     s_home_pushes = switch_row_icon(list, LV_SYMBOL_BELL, "All messages", muse_settings_pushes_on(), on_pushes_sw);
+    s_own_sw = switch_row_icon(list, LV_SYMBOL_HOME, "Device requests only", muse_settings_own_only(), on_own_sw);
+    s_quiet_sw = switch_row_icon(list, LV_SYMBOL_EYE_CLOSE, "Quiet 23:00-06:00", muse_settings_quiet_night(), on_quiet_sw);
+    note(list, "Quiet hours use Beijing time.\nManual requests still work.\nOnly while device waits for replies.");
     row(list, LV_SYMBOL_BLUETOOTH, "Bluetooth", &s_home_ble, on_nav, (void *)&BLE);
     row(list, LV_SYMBOL_VOLUME_MAX, "Sound", &s_home_sound, on_nav, (void *)&SOUND);
     row(list, LV_SYMBOL_EYE_CLOSE, "Sleep", &s_home_sleep, on_nav, (void *)&SLEEP);
@@ -1318,6 +1330,8 @@ static void tick_home(void)
     }
     set_text(s_home_sleep, sleep_name(muse_settings_sleep_s()));
     bool pushes = muse_settings_pushes_on();
+    lv_obj_set_state(s_own_sw, LV_STATE_CHECKED, muse_settings_own_only());
+    lv_obj_set_state(s_quiet_sw, LV_STATE_CHECKED, muse_settings_quiet_night());
     if (pushes != lv_obj_has_state(s_home_pushes, LV_STATE_CHECKED)) {
         lv_obj_set_state(s_home_pushes, LV_STATE_CHECKED, pushes);
     }

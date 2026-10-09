@@ -1726,6 +1726,7 @@ static volatile bool s_snapshot;
 static void send_snapshot(void)
 {
 #if LV_USE_SNAPSHOT
+    if (!muse_console_host()) return;
     lv_draw_buf_t *buf = lv_snapshot_take(lv_screen_active(), LV_COLOR_FORMAT_RGB565);
     if (!buf) {
         return;
@@ -1735,7 +1736,12 @@ static void send_snapshot(void)
     int n = snprintf(hdr, sizeof(hdr), "\nSNAP BEGIN %d %d %d\n", (int)buf->header.w, (int)buf->header.h, RAW);
     muse_console_write(hdr, n);
     static unsigned char b64[4 * RAW / 3 + 4];
+    int64_t deadline = esp_timer_get_time() + 5000000;
     for (uint32_t y = 0; y < buf->header.h; y++) {
+        if (!muse_console_host() || esp_timer_get_time() > deadline) {
+            lv_draw_buf_destroy(buf);
+            return;
+        }
         const unsigned char *p = buf->data + y * buf->header.stride;
         size_t left = buf->header.w * 2;
         while (left) {
